@@ -19,6 +19,7 @@ const purchaseSchema = new mongoose.Schema({
         date: { type: Date, default: Date.now }
     }],
     date: { type: Date, default: Date.now },
+    store: { type: mongoose.Schema.Types.ObjectId, ref: 'Store', required: true }
 }, { timestamps: true });
 
 module.exports = mongoose.model('Purchase', purchaseSchema);

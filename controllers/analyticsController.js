@@ -1,22 +1,33 @@
+const mongoose = require('mongoose');
 const Sale = require('../models/Sale');
 const Product = require('../models/Product');
 const Expense = require('../models/Expense');
 const Purchase = require('../models/Purchase');
+
+// Helper to get active store
+const getActiveStore = (req) => {
+    return req.user.store || req.headers['x-store-id'];
+};
 
 // @desc    Get dashboard stats
 // @route   GET /api/analytics/dashboard
 const getDashboardStats = async (req, res) => {
     const { startDate, endDate } = req.query;
 
-    let dateFilter = {};
-    if (startDate && endDate) {
-        dateFilter.createdAt = {
-            $gte: new Date(startDate),
-            $lte: new Date(endDate)
-        };
-    }
-
     try {
+        const storeId = getActiveStore(req);
+        if (!storeId) return res.status(400).json({ message: 'Store context required' });
+
+        const storeObjectId = new mongoose.Types.ObjectId(storeId);
+
+        let dateFilter = { store: storeObjectId };
+        if (startDate && endDate) {
+            dateFilter.createdAt = {
+                $gte: new Date(startDate),
+                $lte: new Date(endDate)
+            };
+        }
+
         // Sales Stats (filtered)
         const salesStats = await Sale.aggregate([
             { $match: dateFilter },
@@ -50,9 +61,25 @@ const getDashboardStats = async (req, res) => {
             { $group: { _id: null, total: { $sum: "$amount" } } }
         ]);
 
-        // Global Inventory Stats (not filtered by date)
+        // Global Inventory Stats (filtered by store)
         const inventorySummary = await Product.aggregate([
-            { $group: { _id: null, totalCost: { $sum: { $multiply: ["$costPrice", "$totalStock"] } }, totalItems: { $sum: "$totalStock" } } }
+            { $match: { store: storeObjectId } },
+            {
+                $group: {
+                    _id: null,
+                    totalCost: {
+                        $sum: {
+                            $multiply: [
+                                "$costPrice",
+                                { $cond: { if: { $gt: ["$totalStock", 0] }, then: "$totalStock", else: 0 } }
+                            ]
+                        }
+                    },
+                    totalItems: {
+                        $sum: { $cond: { if: { $gt: ["$totalStock", 0] }, then: "$totalStock", else: 0 } }
+                    }
+                }
+            }
         ]);
 
         const sevenDaysAgo = new Date();
@@ -61,7 +88,7 @@ const getDashboardStats = async (req, res) => {
 
         // Trend aggregation (Sales & Profit)
         const salesTrend = await Sale.aggregate([
-            { $match: { createdAt: { $gte: sevenDaysAgo } } },
+            { $match: { createdAt: { $gte: sevenDaysAgo }, store: storeObjectId } },
             { $unwind: { path: "$items", preserveNullAndEmptyArrays: true } },
             {
                 $group: {
@@ -85,7 +112,7 @@ const getDashboardStats = async (req, res) => {
 
         // Trend aggregation (Purchases)
         const purchaseTrend = await Purchase.aggregate([
-            { $match: { createdAt: { $gte: sevenDaysAgo } } },
+            { $match: { createdAt: { $gte: sevenDaysAgo }, store: storeObjectId } },
             {
                 $group: {
                     _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
@@ -139,11 +166,15 @@ const getDashboardStats = async (req, res) => {
 // @route   GET /api/analytics/sales-report
 const getSalesReport = async (req, res) => {
     const { startDate, endDate } = req.query;
-    let dateFilter = {};
-    if (startDate && endDate) {
-        dateFilter.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
-    }
     try {
+        const storeId = getActiveStore(req);
+        if (!storeId) return res.status(400).json({ message: 'Store context required' });
+
+        let dateFilter = { store: storeId };
+        if (startDate && endDate) {
+            dateFilter.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
+        }
+
         const sales = await Sale.find(dateFilter)
             .populate('salesman', 'name')
             .populate('store', 'name')
@@ -158,7 +189,12 @@ const getSalesReport = async (req, res) => {
 // @route   GET /api/analytics/top-selling
 const getTopSelling = async (req, res) => {
     try {
+        const storeId = getActiveStore(req);
+        if (!storeId) return res.status(400).json({ message: 'Store context required' });
+        const storeObjectId = new mongoose.Types.ObjectId(storeId);
+
         const topProducts = await Sale.aggregate([
+            { $match: { store: storeObjectId } },
             { $unwind: "$items" },
             {
                 $group: {
@@ -178,4 +214,100 @@ const getTopSelling = async (req, res) => {
     }
 };
 
-module.exports = { getDashboardStats, getSalesReport, getTopSelling };
+// @desc    Get Stock Report
+// @route   GET /api/analytics/stock-report
+const getStockReport = async (req, res) => {
+    try {
+        const storeId = getActiveStore(req);
+        if (!storeId) return res.status(400).json({ message: 'Store context required' });
+
+        const products = await Product.find({ store: storeId })
+            .select('name barcode costPrice salePrice totalStock category')
+            .sort({ name: 1 });
+
+        res.json(products);
+    } catch (error) {
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// @desc    Get Profit & Loss Report
+// @route   GET /api/analytics/pnl-report
+const getPnLReport = async (req, res) => {
+    const { startDate, endDate } = req.query;
+    try {
+        const storeId = getActiveStore(req);
+        if (!storeId) return res.status(400).json({ message: 'Store context required' });
+        const storeObjectId = new mongoose.Types.ObjectId(storeId);
+
+        let dateFilter = { store: storeObjectId };
+        if (startDate && endDate) {
+            dateFilter.createdAt = {
+                $gte: new Date(startDate),
+                $lte: new Date(endDate)
+            };
+        }
+
+        // Sales and Profit from Sales
+        const salesProfit = await Sale.aggregate([
+            { $match: dateFilter },
+            { $unwind: "$items" },
+            {
+                $group: {
+                    _id: null,
+                    totalSales: { $sum: "$totalAmount" },
+                    totalCost: { $sum: { $multiply: ["$items.costPrice", "$items.quantity"] } }
+                }
+            }
+        ]);
+
+        // Expenses
+        const expenseTotal = await Expense.aggregate([
+            { $match: dateFilter },
+            { $group: { _id: null, total: { $sum: "$amount" } } }
+        ]);
+
+        const grossProfit = (salesProfit[0]?.totalSales || 0) - (salesProfit[0]?.totalCost || 0);
+        const netProfit = grossProfit - (expenseTotal[0]?.total || 0);
+
+        res.json({
+            revenue: salesProfit[0]?.totalSales || 0,
+            costOfGoodsSold: salesProfit[0]?.totalCost || 0,
+            grossProfit,
+            expenses: expenseTotal[0]?.total || 0,
+            netProfit
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// @desc    Get Inventory Invoices (Purchase History)
+// @route   GET /api/analytics/inventory-invoices
+const getInventoryInvoices = async (req, res) => {
+    const { startDate, endDate } = req.query;
+    try {
+        const storeId = getActiveStore(req);
+        if (!storeId) return res.status(400).json({ message: 'Store context required' });
+
+        let dateFilter = { store: storeId };
+        if (startDate && endDate) {
+            dateFilter.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
+        }
+
+        const purchases = await Purchase.find(dateFilter)
+            .sort({ createdAt: -1 });
+        res.json(purchases);
+    } catch (error) {
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+module.exports = {
+    getDashboardStats,
+    getSalesReport,
+    getTopSelling,
+    getStockReport,
+    getPnLReport,
+    getInventoryInvoices
+};

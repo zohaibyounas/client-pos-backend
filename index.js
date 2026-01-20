@@ -12,7 +12,7 @@ app.use(
   cors({
     origin: ["http://localhost:3000", "https://client-pos-frontend.vercel.app"],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-store-id"],
     credentials: true,
   })
 );
@@ -35,6 +35,8 @@ app.use("/api/expenses", require("./routes/expenseRoutes"));
 app.use("/api/purchases", require("./routes/purchaseRoutes"));
 app.use("/api/users", require("./routes/userRoutes"));
 app.use("/api/customers", require("./routes/customerRoutes"));
+app.use("/api/banks", require("./routes/bankRoutes"));
+app.use("/api/transactions", require("./routes/transactionRoutes"));
 
 // Static files for product images
 const path = require("path");

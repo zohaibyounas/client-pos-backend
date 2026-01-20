@@ -1,11 +1,20 @@
 const Purchase = require('../models/Purchase');
 const Product = require('../models/Product');
 
+// Helper to get active store
+const getActiveStore = (req) => {
+    return req.user.store || req.headers['x-store-id'];
+};
+
 // @desc    Get all purchases
 // @route   GET /api/purchases
 const getPurchases = async (req, res) => {
     const { startDate, endDate } = req.query;
-    let dateFilter = {};
+    
+    const storeId = getActiveStore(req);
+    if (!storeId) return res.status(400).json({ message: 'Store context required' });
+
+    let dateFilter = { store: storeId };
     if (startDate && endDate) {
         dateFilter.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
     }

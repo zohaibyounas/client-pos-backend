@@ -3,12 +3,18 @@ const router = express.Router();
 const {
     getDashboardStats,
     getSalesReport,
-    getTopSelling
+    getTopSelling,
+    getStockReport,
+    getPnLReport,
+    getInventoryInvoices
 } = require('../controllers/analyticsController');
 const { protect } = require('../middleware/authMiddleware');
 
 router.get('/dashboard', protect, getDashboardStats);
 router.get('/sales-report', protect, getSalesReport);
 router.get('/top-selling', protect, getTopSelling);
+router.get('/stock-report', protect, getStockReport);
+router.get('/pnl-report', protect, getPnLReport);
+router.get('/inventory-invoices', protect, getInventoryInvoices);
 
 module.exports = router;

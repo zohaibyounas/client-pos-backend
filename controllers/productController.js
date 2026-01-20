@@ -1,14 +1,23 @@
 const Product = require('../models/Product');
 const Inventory = require('../models/Inventory');
 
+// Helper to get active store
+const getActiveStore = (req) => {
+    return req.user.store || req.headers['x-store-id'];
+};
+
 // @desc    Get all products
 // @route   GET /api/products
 // @access  Private
 const getProducts = async (req, res) => {
     try {
-        const products = await Product.find();
+        const storeId = getActiveStore(req);
+        if (!storeId) return res.status(400).json({ message: 'Store context required' });
+
+        const products = await Product.find({ store: storeId });
         res.json(products);
     } catch (error) {
+        console.error(error);
         res.status(500).json({ message: 'Server error' });
     }
 };
@@ -31,35 +40,44 @@ const getProductById = async (req, res) => {
 
 // @desc    Create a product
 // @route   POST /api/products
-// @access  Private/Admin
+// @access  Private
 const createProduct = async (req, res) => {
-    const {
-        name, barcode, costPrice, salePrice,
-        discount, vendor, category, totalStock,
-        warehouseId
-    } = req.body;
+    const { name, barcode, costPrice, salePrice, discount, totalStock, stock, category, items, vendor, description, warehouseId } = req.body;
+
+    // Use totalStock (sent by frontend) or stock (alternate name)
+    const initialStock = Number(totalStock) || Number(stock) || 0;
 
     try {
-        // Check if barcode already exists
-        const barcodeExists = await Product.findOne({ barcode });
-        if (barcodeExists) {
-            return res.status(400).json({ message: 'Barcode already exists' });
+        const storeId = getActiveStore(req);
+        if (!storeId) return res.status(400).json({ message: 'Store context required' });
+
+        const productExists = await Product.findOne({ barcode, store: storeId });
+        if (productExists) {
+            return res.status(400).json({ message: 'Product with this barcode already exists in this store' });
         }
 
         const product = new Product({
-            name, barcode, costPrice, salePrice,
-            discount, vendor, category, totalStock,
-            image: req.file ? `/uploads/${req.file.filename}` : ''
+            name,
+            barcode,
+            costPrice: Number(costPrice),
+            salePrice: Number(salePrice),
+            discount: Number(discount) || 0,
+            totalStock: initialStock,
+            category,
+            vendor,
+            description,
+            image: req.file ? `/uploads/${req.file.filename}` : undefined,
+            store: storeId
         });
 
         const createdProduct = await product.save();
 
-        // If warehouseId and initial stock provided, create inventory entry
-        if (warehouseId && totalStock > 0) {
+        // If warehouse and stock are provided, create initial inventory entry
+        if (warehouseId && initialStock > 0) {
             await Inventory.create({
                 product: createdProduct._id,
                 warehouse: warehouseId,
-                quantity: totalStock
+                quantity: initialStock
             });
         }
 
@@ -70,21 +88,37 @@ const createProduct = async (req, res) => {
     }
 };
 
-// @desc    Update product
+// @desc    Update a product
 // @route   PUT /api/products/:id
-// @access  Private/Admin
+// @access  Private
 const updateProduct = async (req, res) => {
+    const { name, barcode, costPrice, salePrice, discount, totalStock, category, vendor, description } = req.body;
+
     try {
         const product = await Product.findById(req.params.id);
+
         if (product) {
-            product.name = req.body.name || product.name;
-            product.barcode = req.body.barcode || product.barcode;
-            product.costPrice = req.body.costPrice || product.costPrice;
-            product.salePrice = req.body.salePrice || product.salePrice;
-            product.discount = req.body.discount || product.discount;
-            product.vendor = req.body.vendor || product.vendor;
-            product.category = req.body.category || product.category;
-            product.totalStock = req.body.totalStock !== undefined ? req.body.totalStock : product.totalStock;
+            // Check if barcode is being changed and if it conflicts in the SAME store
+            if (barcode && barcode !== product.barcode) {
+                const productExists = await Product.findOne({
+                    barcode,
+                    store: product.store,
+                    _id: { $ne: product._id }
+                });
+                if (productExists) {
+                    return res.status(400).json({ message: 'Barcode already in use' });
+                }
+            }
+
+            product.name = name || product.name;
+            product.barcode = barcode || product.barcode;
+            product.costPrice = costPrice !== undefined ? Number(costPrice) : product.costPrice;
+            product.salePrice = salePrice !== undefined ? Number(salePrice) : product.salePrice;
+            product.discount = discount !== undefined ? Number(discount) : (product.discount || 0);
+            product.totalStock = totalStock !== undefined ? Number(totalStock) : product.totalStock;
+            product.category = category || product.category;
+            product.vendor = vendor || product.vendor;
+            product.description = description || product.description;
 
             if (req.file) {
                 product.image = `/uploads/${req.file.filename}`;
@@ -96,16 +130,18 @@ const updateProduct = async (req, res) => {
             res.status(404).json({ message: 'Product not found' });
         }
     } catch (error) {
+        console.error(error);
         res.status(500).json({ message: 'Server error' });
     }
 };
 
-// @desc    Delete product
+// @desc    Delete a product
 // @route   DELETE /api/products/:id
-// @access  Private/Admin
+// @access  Private
 const deleteProduct = async (req, res) => {
     try {
         const product = await Product.findById(req.params.id);
+
         if (product) {
             await product.deleteOne();
             res.json({ message: 'Product removed' });
@@ -117,4 +153,10 @@ const deleteProduct = async (req, res) => {
     }
 };
 
-module.exports = { getProducts, getProductById, createProduct, updateProduct, deleteProduct };
+module.exports = {
+    getProducts,
+    getProductById,
+    createProduct,
+    updateProduct,
+    deleteProduct
+};

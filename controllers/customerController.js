@@ -1,15 +1,23 @@
 const Customer = require('../models/Customer');
 
+// Helper to get active store
+const getActiveStore = (req) => {
+    return req.user.store || req.headers['x-store-id'];
+};
+
 // @desc    Create new customer
 // @route   POST /api/customers
 const createCustomer = async (req, res) => {
     const { name, phone, address, kataAccountId, creditLimit, store, notes } = req.body;
 
     try {
-        // Check if customer with phone already exists
-        const existingCustomer = await Customer.findOne({ phone });
+        const storeId = getActiveStore(req);
+        if (!storeId) return res.status(400).json({ message: 'Store context required' });
+
+        // Check if customer with phone already exists IN THIS STORE
+        const existingCustomer = await Customer.findOne({ phone, store: storeId });
         if (existingCustomer) {
-            return res.status(400).json({ message: 'Customer with this phone number already exists' });
+            return res.status(400).json({ message: 'Customer with this phone number already exists in this store' });
         }
 
         const customer = new Customer({
@@ -19,7 +27,7 @@ const createCustomer = async (req, res) => {
             kataAccountId,
             isKataCustomer: !!kataAccountId,
             creditLimit: creditLimit || 0,
-            store,
+            store: storeId, // Force store ID
             notes
         });
 
@@ -35,7 +43,10 @@ const createCustomer = async (req, res) => {
 // @route   GET /api/customers
 const getCustomers = async (req, res) => {
     try {
-        const customers = await Customer.find()
+        const storeId = getActiveStore(req);
+        if (!storeId) return res.status(400).json({ message: 'Store context required' });
+
+        const customers = await Customer.find({ store: storeId })
             .populate('store', 'name')
             .sort({ createdAt: -1 });
         res.json(customers);
@@ -46,9 +57,13 @@ const getCustomers = async (req, res) => {
 
 // @desc    Get customer by phone
 // @route   GET /api/customers/phone/:phone
+// @query   storeId (optional, mostly handled by auth/header)
 const getCustomerByPhone = async (req, res) => {
     try {
-        const customer = await Customer.findOne({ phone: req.params.phone })
+        const storeId = getActiveStore(req);
+        if (!storeId) return res.status(400).json({ message: 'Store context required' });
+
+        const customer = await Customer.findOne({ phone: req.params.phone, store: storeId })
             .populate('store', 'name');
 
         if (!customer) {

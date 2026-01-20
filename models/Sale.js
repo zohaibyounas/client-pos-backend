@@ -22,6 +22,18 @@ const saleSchema = new mongoose.Schema({
         enum: ['paid', 'partial', 'unpaid'],
         default: 'paid'
     },
+    type: {
+        type: String,
+        enum: ['invoice', 'quotation', 'estimate'],
+        default: 'invoice'
+    },
+    customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer' },
+    customerName: String,
+    customerPhone: String,
+    customerAddress: String,
+    referenceNo: String,
+    remarks: String,
+    dueDate: Date,
     invoiceId: { type: String, unique: true },
 }, { timestamps: true });
 

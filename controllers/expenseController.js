@@ -1,10 +1,19 @@
 const Expense = require('../models/Expense');
 
+// Helper to get active store
+const getActiveStore = (req) => {
+    return req.user.store || req.headers['x-store-id'];
+};
+
 // @desc    Get all expenses
 // @route   GET /api/expenses
 const getExpenses = async (req, res) => {
     const { startDate, endDate } = req.query;
-    let dateFilter = {};
+    const storeId = getActiveStore(req);
+
+    if (!storeId) return res.status(400).json({ message: 'Store context required' });
+
+    let dateFilter = { store: storeId };
     if (startDate && endDate) {
         dateFilter.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
     }
@@ -19,9 +28,12 @@ const getExpenses = async (req, res) => {
 // @desc    Create an expense
 // @route   POST /api/expenses
 const createExpense = async (req, res) => {
-    const { title, amount, category, description, store } = req.body;
+    const { title, amount, category, description } = req.body;
     try {
-        const expense = new Expense({ title, amount, category, description, store });
+        const storeId = getActiveStore(req);
+        if (!storeId) return res.status(400).json({ message: 'Store context required' });
+
+        const expense = new Expense({ title, amount, category, description, store: storeId });
         const createdExpense = await expense.save();
         res.status(201).json(createdExpense);
     } catch (error) {

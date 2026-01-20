@@ -1,11 +1,19 @@
 const Warehouse = require('../models/Warehouse');
 
+// Helper to get active store
+const getActiveStore = (req) => {
+    return req.user.store || req.headers['x-store-id'];
+};
+
 // @desc    Get all warehouses
 // @route   GET /api/warehouses
 // @access  Private
 const getWarehouses = async (req, res) => {
     try {
-        const warehouses = await Warehouse.find();
+        const storeId = getActiveStore(req);
+        if (!storeId) return res.status(400).json({ message: 'Store context required' });
+
+        const warehouses = await Warehouse.find({ store: storeId });
         res.json(warehouses);
     } catch (error) {
         res.status(500).json({ message: 'Server error' });
@@ -18,7 +26,10 @@ const getWarehouses = async (req, res) => {
 const createWarehouse = async (req, res) => {
     const { name, location, contactPerson, phone } = req.body;
     try {
-        const warehouse = new Warehouse({ name, location, contactPerson, phone });
+        const storeId = getActiveStore(req);
+        if (!storeId) return res.status(400).json({ message: 'Store context required' });
+
+        const warehouse = new Warehouse({ name, location, contactPerson, phone, store: storeId });
         const createdWarehouse = await warehouse.save();
         res.status(201).json(createdWarehouse);
     } catch (error) {
