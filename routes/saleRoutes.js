@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { createSale, getSales, deleteSale, convertQuoteToInvoice } = require('../controllers/saleController');
+const { createSale, getSales, deleteSale, convertQuoteToInvoice, updateSale } = require('../controllers/saleController');
 const { protect, admin } = require('../middleware/authMiddleware');
 
 router.route('/')
@@ -8,6 +8,7 @@ router.route('/')
     .post(protect, createSale);
 
 router.route('/:id')
+    .put(protect, updateSale)
     .delete(protect, admin, deleteSale);
 
 router.route('/:id/convert')

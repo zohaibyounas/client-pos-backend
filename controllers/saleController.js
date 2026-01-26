@@ -259,4 +259,33 @@ const convertQuoteToInvoice = async (req, res) => {
     }
 };
 
-module.exports = { createSale, getSales, deleteSale, convertQuoteToInvoice };
+// @desc    Update sale metadata
+// @route   PUT /api/sales/:id
+const updateSale = async (req, res) => {
+    const {
+        customer, customerName, customerPhone,
+        customerAddress, referenceNo, remarks
+    } = req.body;
+
+    try {
+        const sale = await Sale.findById(req.params.id);
+        if (!sale) {
+            return res.status(404).json({ message: 'Sale not found' });
+        }
+
+        // Update metadata only
+        sale.customer = customer || sale.customer;
+        sale.customerName = customerName || sale.customerName;
+        sale.customerPhone = customerPhone || sale.customerPhone;
+        sale.customerAddress = customerAddress || sale.customerAddress;
+        sale.referenceNo = referenceNo || sale.referenceNo;
+        sale.remarks = remarks || sale.remarks;
+
+        const updatedSale = await sale.save();
+        res.json(updatedSale);
+    } catch (error) {
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+module.exports = { createSale, getSales, deleteSale, convertQuoteToInvoice, updateSale };

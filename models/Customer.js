@@ -26,8 +26,7 @@ const customerSchema = new mongoose.Schema({
     isActive: { type: Boolean, default: true }
 }, { timestamps: true });
 
-// Index for fast phone lookup
-customerSchema.index({ phone: 1 });
+// Index for fast store lookup
 customerSchema.index({ store: 1 });
 
 module.exports = mongoose.model('Customer', customerSchema);

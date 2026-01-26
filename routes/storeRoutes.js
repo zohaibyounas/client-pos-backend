@@ -4,7 +4,7 @@ const { getStores, createStore } = require('../controllers/storeController');
 const { protect, admin } = require('../middleware/authMiddleware');
 
 router.route('/')
-    .get(protect, admin, getStores)
+    .get(protect, getStores)
     .post(protect, admin, createStore);
 
 module.exports = router;
