@@ -8,7 +8,7 @@ router.route('/')
     .post(protect, createSale);
 
 router.route('/:id')
-    .put(protect, updateSale)
+    .put(protect, admin, updateSale)
     .delete(protect, admin, deleteSale);
 
 router.route('/:id/convert')

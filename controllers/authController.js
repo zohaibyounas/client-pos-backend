@@ -8,7 +8,7 @@ const loginUser = async (req, res) => {
     try {
         const user = await User.findOne({ email });
 
-        if (user && (await bcrypt.compare(password, user.password))) {
+        if (user && (await user.comparePassword(password))) {
             const token = jwt.sign({
                 id: user._id,
                 role: user.role,
