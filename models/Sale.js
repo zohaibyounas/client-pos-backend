@@ -6,7 +6,8 @@ const saleItemSchema = new mongoose.Schema({
     costPrice: { type: Number, required: true },
     price: { type: Number, required: true },
     discount: { type: Number, default: 0 },
-    total: { type: Number, required: true }
+    total: { type: Number, required: true },
+    store: { type: mongoose.Schema.Types.ObjectId, ref: 'Store', required: true }
 });
 
 const saleSchema = new mongoose.Schema({

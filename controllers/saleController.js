@@ -2,6 +2,8 @@ const Sale = require('../models/Sale');
 const Product = require('../models/Product');
 const Inventory = require('../models/Inventory');
 const Customer = require('../models/Customer');
+const Store = require('../models/Store');
+const { sendToPrinter } = require('../utils/printerService');
 
 // Helper to get active store
 const getActiveStore = (req) => {
@@ -49,7 +51,8 @@ const createSale = async (req, res) => {
                 quantity: item.quantity,
                 costPrice: product.costPrice,
                 price: item.price,
-                total: item.total
+                total: item.total,
+                store: product.store // Ensure store is captured for each item
             });
         }
 
@@ -84,10 +87,27 @@ const createSale = async (req, res) => {
                     product.totalStock -= item.quantity;
                     await product.save();
 
-                    const inventory = await Inventory.findOne({ product: item.product });
-                    if (inventory) {
-                        inventory.quantity -= item.quantity;
-                        await inventory.save();
+                    // Find a warehouse belonging to the store where the product originates
+                    const warehouse = await require('../models/Warehouse').findOne({ store: item.store });
+
+                    if (warehouse) {
+                        const inventory = await Inventory.findOne({
+                            product: item.product,
+                            warehouse: warehouse._id
+                        });
+                        if (inventory) {
+                            inventory.quantity -= item.quantity;
+                            await inventory.save();
+                        } else {
+                            // If no inventory record exists for this warehouse, create it with negative balance (or handle as error)
+                            await Inventory.create({
+                                product: item.product,
+                                warehouse: warehouse._id,
+                                quantity: -item.quantity
+                            });
+                        }
+                    } else {
+                        console.warn(`No warehouse found for store ${item.store}. Global inventory update skipped.`);
                     }
                 }
             }
@@ -126,8 +146,35 @@ const createSale = async (req, res) => {
 
         const populatedSale = await Sale.findById(createdSale._id)
             .populate('items.product', 'name barcode')
+            .populate('items.store', 'name printerEnabled printerEndpoint')
             .populate('store', 'name')
             .populate('customer', 'name phone');
+
+        // Trigger IoT Printing per store
+        if (type === 'invoice') {
+            const storeGroups = {};
+            populatedSale.items.forEach(item => {
+                const sId = item.store._id.toString();
+                if (!storeGroups[sId]) {
+                    storeGroups[sId] = {
+                        store: item.store,
+                        items: []
+                    };
+                }
+                storeGroups[sId].items.push(item);
+            });
+
+            // Iterate through each store and trigger print if enabled
+            for (const sId in storeGroups) {
+                const group = storeGroups[sId];
+                if (group.store.printerEnabled && group.store.printerEndpoint) {
+                    // Fire and forget or handle asynchronously
+                    sendToPrinter(group.store, populatedSale, group.items).catch(err =>
+                        console.error(`Printer trigger failed for ${group.store.name}:`, err)
+                    );
+                }
+            }
+        }
 
         res.status(201).json(populatedSale);
     } catch (error) {

@@ -14,7 +14,10 @@ const getProducts = async (req, res) => {
         const storeId = getActiveStore(req);
         if (!storeId) return res.status(400).json({ message: 'Store context required' });
 
-        const products = await Product.find({ store: storeId });
+        const { allStores } = req.query;
+        const query = allStores === 'true' ? {} : { store: storeId };
+
+        const products = await Product.find(query).populate('store', 'name');
         res.json(products);
     } catch (error) {
         console.error(error);
