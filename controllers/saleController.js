@@ -2,8 +2,11 @@ const Sale = require('../models/Sale');
 const Product = require('../models/Product');
 const Inventory = require('../models/Inventory');
 const Customer = require('../models/Customer');
+const Retailer = require('../models/Retailer');
 const Store = require('../models/Store');
-const { sendToPrinter } = require('../utils/printerService');
+const Warehouse = require('../models/Warehouse');
+const { sendToPrinter, sendWarehouseReceipt } = require('../utils/printerService');
+const { syncProductTotalStock } = require('./inventoryController');
 
 // Helper to get active store
 const getActiveStore = (req) => {
@@ -19,8 +22,9 @@ const createSale = async (req, res) => {
         invoiceDiscount, totalAmount, paidAmount,
         type = 'invoice', // invoice, quotation, estimate
         customer, // customerId
+        retailer, // retailerId
         customerName, customerPhone, customerAddress,
-        referenceNo, remarks, dueDate
+        referenceNo, remarks, dueDate, saleDate
     } = req.body;
 
     try {
@@ -63,53 +67,66 @@ const createSale = async (req, res) => {
             subtotal,
             invoiceDiscount,
             totalAmount,
-            paidAmount,
+            paidAmount: paidAmount || 0,
             invoiceId,
-            paymentStatus: paidAmount >= totalAmount ? 'paid' : (paidAmount > 0 ? 'partial' : 'unpaid'),
+            paymentStatus: (paidAmount || 0) >= totalAmount ? 'paid' : ((paidAmount || 0) > 0 ? 'partial' : 'unpaid'),
             type,
             customer,
+            retailer,
             customerName,
             customerPhone,
             customerAddress,
             referenceNo,
             remarks,
-            dueDate
+            dueDate,
+            saleDate: saleDate ? new Date(saleDate) : new Date() // Auto-detect current date/time if not provided
         });
 
         const createdSale = await sale.save();
 
         // ONLY Update Stock & Customer Balance if it's an INVOICE
+        // Track which warehouse each item belongs to for receipt printing
+        // Map: productId -> warehouseId (for this sale)
+        const productWarehouseMap = {}; 
+        
         if (type === 'invoice') {
             // Update Stock
             for (const item of enrichedItems) {
-                const product = await Product.findById(item.product);
-                if (product) {
-                    product.totalStock -= item.quantity;
-                    await product.save();
+                // Find warehouse(s) that have this product in inventory
+                    // Try to find a warehouse with available stock first (prefer warehouse with most stock)
+                    let inventory = await Inventory.findOne({
+                        product: item.product,
+                        quantity: { $gt: 0 }
+                    }).populate('warehouse').sort({ quantity: -1 });
 
-                    // Find a warehouse belonging to the store where the product originates
-                    const warehouse = await require('../models/Warehouse').findOne({ store: item.store });
+                    // If no warehouse has stock, find any warehouse that has this product
+                    if (!inventory) {
+                        inventory = await Inventory.findOne({
+                            product: item.product
+                        }).populate('warehouse');
+                    }
 
-                    if (warehouse) {
-                        const inventory = await Inventory.findOne({
-                            product: item.product,
-                            warehouse: warehouse._id
-                        });
-                        if (inventory) {
-                            inventory.quantity -= item.quantity;
-                            await inventory.save();
-                        } else {
-                            // If no inventory record exists for this warehouse, create it with negative balance (or handle as error)
+                    // If still no inventory found, find the first warehouse (for new products)
+                    if (!inventory) {
+                        const warehouse = await Warehouse.findOne({});
+                        if (warehouse) {
+                            // Create inventory entry with negative balance
                             await Inventory.create({
                                 product: item.product,
                                 warehouse: warehouse._id,
                                 quantity: -item.quantity
                             });
+                            productWarehouseMap[item.product.toString()] = warehouse._id.toString();
                         }
                     } else {
-                        console.warn(`No warehouse found for store ${item.store}. Global inventory update skipped.`);
+                        // Update inventory quantity
+                        inventory.quantity -= item.quantity;
+                        await inventory.save();
+                        productWarehouseMap[item.product.toString()] = inventory.warehouse._id.toString();
                     }
-                }
+                
+                // Sync product totalStock from all warehouse inventories
+                await syncProductTotalStock(item.product);
             }
 
             // Update Customer Balance if linked
@@ -142,6 +159,55 @@ const createSale = async (req, res) => {
                     await cust.save();
                 }
             }
+
+            // Update Retailer Balance if linked (for wholesale sales)
+            if (retailer) {
+                const ret = await Retailer.findById(retailer);
+                if (ret) {
+                    // Add sale transaction (Debit - retailer owes us)
+                    ret.transactions.push({
+                        type: 'sale',
+                        amount: totalAmount,
+                        sale: createdSale._id,
+                        description: `Sale Invoice ${invoiceId} - Total: Rs. ${totalAmount}`
+                    });
+
+                    // Add payment transaction if any (Credit - reduces what retailer owes)
+                    if (paidAmount > 0) {
+                        ret.transactions.push({
+                            type: 'payment',
+                            amount: paidAmount,
+                            sale: createdSale._id,
+                            description: `Payment for Invoice ${invoiceId}`
+                        });
+                    }
+
+                    // Recalculate balance from all transactions
+                    const totalSales = ret.transactions
+                        .filter(t => t.type === 'sale')
+                        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+                    
+                    const totalPurchases = ret.transactions
+                        .filter(t => t.type === 'purchase')
+                        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+                    
+                    const totalPaid = ret.transactions
+                        .filter(t => t.type === 'payment')
+                        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+                    
+                    const totalDebit = totalSales + totalPurchases;
+                    const remainingBalance = totalDebit - totalPaid;
+
+                    console.log(`Sale Create - Retailer ${ret.name}: Sales=${totalSales}, Purchases=${totalPurchases}, Paid=${totalPaid}, Remaining=${remainingBalance}`);
+
+                    // Update balances based on calculated values
+                    ret.balance = remainingBalance;
+                    ret.paidAmount = totalPaid;
+                    ret.remainingBalance = remainingBalance;
+                    
+                    await ret.save();
+                }
+            }
         }
 
         const populatedSale = await Sale.findById(createdSale._id)
@@ -150,9 +216,11 @@ const createSale = async (req, res) => {
             .populate('store', 'name')
             .populate('customer', 'name phone');
 
-        // Trigger IoT Printing per store
+        // Trigger IoT Printing per store and warehouse
         if (type === 'invoice') {
             const storeGroups = {};
+            const warehouseGroups = {};
+            
             populatedSale.items.forEach(item => {
                 const sId = item.store._id.toString();
                 if (!storeGroups[sId]) {
@@ -169,8 +237,42 @@ const createSale = async (req, res) => {
                 const group = storeGroups[sId];
                 if (group.store.printerEnabled && group.store.printerEndpoint) {
                     // Fire and forget or handle asynchronously
-                    sendToPrinter(group.store, populatedSale, group.items).catch(err =>
+                    sendToPrinter(group.store, populatedSale, group.items, false).catch(err =>
                         console.error(`Printer trigger failed for ${group.store.name}:`, err)
+                    );
+                }
+            }
+
+            // Group items by warehouse and trigger warehouse receipt printing (without prices)
+            // Use the productWarehouseMap to group items by their actual warehouse
+            for (const item of populatedSale.items) {
+                const productId = item.product._id.toString();
+                const warehouseId = productWarehouseMap[productId];
+                
+                if (warehouseId) {
+                    // Fetch warehouse details
+                    const warehouse = await Warehouse.findById(warehouseId);
+                    if (warehouse && warehouse.printerEnabled && warehouse.printerEndpoint) {
+                        const wId = warehouse._id.toString();
+                        if (!warehouseGroups[wId]) {
+                            warehouseGroups[wId] = {
+                                warehouse: warehouse,
+                                items: []
+                            };
+                        }
+                        warehouseGroups[wId].items.push(item);
+                    }
+                }
+            }
+
+            // Trigger warehouse receipt printing (without prices)
+            // Each warehouse will receive receipt only for products sold from that warehouse
+            for (const wId in warehouseGroups) {
+                const group = warehouseGroups[wId];
+                if (group.items.length > 0) {
+                    console.log(`Sending receipt to ${group.warehouse.name} for ${group.items.length} item(s)`);
+                    sendWarehouseReceipt(group.warehouse, populatedSale, group.items).catch(err =>
+                        console.error(`Warehouse receipt printing failed for ${group.warehouse.name}:`, err)
                     );
                 }
             }
@@ -222,10 +324,17 @@ const deleteSale = async (req, res) => {
         if (sale) {
             // Revert Stock
             for (const item of sale.items) {
-                const product = await Product.findById(item.product);
-                if (product) {
-                    product.totalStock += item.quantity;
-                    await product.save();
+                // Find inventory and return stock
+                const inventory = await Inventory.findOne({ 
+                    product: item.product
+                });
+                
+                if (inventory) {
+                    inventory.quantity += item.quantity;
+                    await inventory.save();
+                    
+                    // Sync product totalStock from all warehouse inventories
+                    await syncProductTotalStock(item.product);
                 }
             }
             await sale.deleteOne();
@@ -311,7 +420,7 @@ const convertQuoteToInvoice = async (req, res) => {
 const updateSale = async (req, res) => {
     const {
         customer, customerName, customerPhone,
-        customerAddress, referenceNo, remarks
+        customerAddress, referenceNo, remarks, saleDate
     } = req.body;
 
     try {
@@ -322,11 +431,12 @@ const updateSale = async (req, res) => {
 
         // Update metadata only
         sale.customer = customer || sale.customer;
-        sale.customerName = customerName || sale.customerName;
-        sale.customerPhone = customerPhone || sale.customerPhone;
-        sale.customerAddress = customerAddress || sale.customerAddress;
-        sale.referenceNo = referenceNo || sale.referenceNo;
-        sale.remarks = remarks || sale.remarks;
+        sale.customerName = customerName !== undefined ? customerName : sale.customerName;
+        sale.customerPhone = customerPhone !== undefined ? customerPhone : sale.customerPhone;
+        sale.customerAddress = customerAddress !== undefined ? customerAddress : sale.customerAddress;
+        sale.referenceNo = referenceNo !== undefined ? referenceNo : sale.referenceNo;
+        sale.remarks = remarks !== undefined ? remarks : sale.remarks;
+        sale.saleDate = saleDate ? new Date(saleDate) : sale.saleDate;
 
         const updatedSale = await sale.save();
         res.json(updatedSale);

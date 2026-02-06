@@ -35,6 +35,9 @@ app.use("/api/expenses", require("./routes/expenseRoutes"));
 app.use("/api/purchases", require("./routes/purchaseRoutes"));
 app.use("/api/users", require("./routes/userRoutes"));
 app.use("/api/customers", require("./routes/customerRoutes"));
+app.use("/api/retailers", require("./routes/retailerRoutes"));
+app.use("/api/employees", require("./routes/employeeRoutes"));
+app.use("/api/attendance", require("./routes/attendanceRoutes"));
 app.use("/api/banks", require("./routes/bankRoutes"));
 app.use("/api/transactions", require("./routes/transactionRoutes"));
 

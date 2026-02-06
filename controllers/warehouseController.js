@@ -10,11 +10,25 @@ const getActiveStore = (req) => {
 // @access  Private
 const getWarehouses = async (req, res) => {
     try {
-        const storeId = getActiveStore(req);
-        if (!storeId) return res.status(400).json({ message: 'Store context required' });
-
-        const warehouses = await Warehouse.find({ store: storeId });
+        // Return all warehouses - they are shared across all stores
+        const warehouses = await Warehouse.find({}).sort({ createdAt: -1 });
         res.json(warehouses);
+    } catch (error) {
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// @desc    Get warehouse by ID
+// @route   GET /api/warehouses/:id
+// @access  Private
+const getWarehouseById = async (req, res) => {
+    try {
+        const warehouse = await Warehouse.findById(req.params.id);
+        if (warehouse) {
+            res.json(warehouse);
+        } else {
+            res.status(404).json({ message: 'Warehouse not found' });
+        }
     } catch (error) {
         res.status(500).json({ message: 'Server error' });
     }
@@ -24,12 +38,17 @@ const getWarehouses = async (req, res) => {
 // @route   POST /api/warehouses
 // @access  Private/Admin
 const createWarehouse = async (req, res) => {
-    const { name, location, contactPerson, phone } = req.body;
+    const { name, location, contactPerson, phone, printerEnabled, printerEndpoint } = req.body;
     try {
-        const storeId = getActiveStore(req);
-        if (!storeId) return res.status(400).json({ message: 'Store context required' });
-
-        const warehouse = new Warehouse({ name, location, contactPerson, phone, store: storeId });
+        // Warehouses are shared across all stores, so no store field needed
+        const warehouse = new Warehouse({ 
+            name, 
+            location, 
+            contactPerson, 
+            phone, 
+            printerEnabled,
+            printerEndpoint
+        });
         const createdWarehouse = await warehouse.save();
         res.status(201).json(createdWarehouse);
     } catch (error) {
@@ -48,6 +67,8 @@ const updateWarehouse = async (req, res) => {
             warehouse.location = req.body.location || warehouse.location;
             warehouse.contactPerson = req.body.contactPerson || warehouse.contactPerson;
             warehouse.phone = req.body.phone || warehouse.phone;
+            warehouse.printerEnabled = req.body.printerEnabled !== undefined ? req.body.printerEnabled : warehouse.printerEnabled;
+            warehouse.printerEndpoint = req.body.printerEndpoint || warehouse.printerEndpoint;
 
             const updatedWarehouse = await warehouse.save();
             res.json(updatedWarehouse);
@@ -76,4 +97,4 @@ const deleteWarehouse = async (req, res) => {
     }
 };
 
-module.exports = { getWarehouses, createWarehouse, updateWarehouse, deleteWarehouse };
+module.exports = { getWarehouses, getWarehouseById, createWarehouse, updateWarehouse, deleteWarehouse };

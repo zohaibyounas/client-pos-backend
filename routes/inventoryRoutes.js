@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getInventoryByProduct, updateStock } = require('../controllers/inventoryController');
+const { getInventoryByProduct, getInventoryByWarehouse, updateStock } = require('../controllers/inventoryController');
 const { protect } = require('../middleware/authMiddleware');
 
 router.route('/')
@@ -8,5 +8,8 @@ router.route('/')
 
 router.route('/product/:productId')
     .get(protect, getInventoryByProduct);
+
+router.route('/warehouse/:warehouseId')
+    .get(protect, getInventoryByWarehouse);
 
 module.exports = router;

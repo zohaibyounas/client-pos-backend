@@ -29,12 +29,14 @@ const saleSchema = new mongoose.Schema({
         default: 'invoice'
     },
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer' },
+    retailer: { type: mongoose.Schema.Types.ObjectId, ref: 'Retailer' }, // Link to retailer for wholesale sales
     customerName: String,
     customerPhone: String,
     customerAddress: String,
     referenceNo: String,
     remarks: String,
     dueDate: Date,
+    saleDate: { type: Date, default: Date.now }, // Custom sale date/time
     invoiceId: { type: String, unique: true },
 }, { timestamps: true });
 

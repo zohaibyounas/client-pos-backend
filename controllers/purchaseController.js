@@ -1,5 +1,7 @@
 const Purchase = require('../models/Purchase');
 const Product = require('../models/Product');
+const Inventory = require('../models/Inventory');
+const { syncProductTotalStock } = require('./inventoryController');
 
 // Helper to get active store
 const getActiveStore = (req) => {
@@ -67,18 +69,38 @@ const createPurchase = async (req, res) => {
 
         const createdPurchase = await purchase.save();
 
-        // Update Stock for each item
+        // Update Stock for each item and add to inventory
         if (items) {
             const parsedItems = JSON.parse(items);
             for (const item of parsedItems) {
                 const product = await Product.findById(item.product);
                 if (product) {
-                    product.totalStock += Number(item.quantity);
-                    // Update cost price if changed? 
-                    // Requirement says "cost price" on product, 
-                    // usually we might update it to latest purchase cost.
+                    // Update cost price if changed
                     product.costPrice = Number(item.costPrice);
                     await product.save();
+                    
+                    // Update inventory in warehouse (use warehouseId from item if available, otherwise use first warehouse)
+                    const warehouseId = item.warehouse || item.warehouseId;
+                    if (warehouseId) {
+                        const inventory = await Inventory.findOne({ 
+                            product: item.product,
+                            warehouse: warehouseId
+                        });
+                        
+                        if (inventory) {
+                            inventory.quantity += Number(item.quantity);
+                            await inventory.save();
+                        } else {
+                            await Inventory.create({
+                                product: item.product,
+                                warehouse: warehouseId,
+                                quantity: Number(item.quantity)
+                            });
+                        }
+                        
+                        // Sync product totalStock from all warehouse inventories
+                        await syncProductTotalStock(item.product);
+                    }
                 }
             }
         }
