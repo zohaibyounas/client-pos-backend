@@ -1,5 +1,7 @@
 const Product = require('../models/Product');
 const Inventory = require('../models/Inventory');
+const Warehouse = require('../models/Warehouse');
+const { syncProductTotalStock } = require('./inventoryController');
 
 // Helper to get active store
 const getActiveStore = (req) => {
@@ -49,19 +51,24 @@ const createProduct = async (req, res) => {
 
     // Use totalStock (sent by frontend) or stock (alternate name)
     const initialStock = Number(totalStock) || Number(stock) || 0;
+    console.log('=== Creating Product ===');
+    console.log('totalStock from request:', totalStock, 'stock from request:', stock, 'initialStock:', initialStock);
 
     try {
         const storeId = getActiveStore(req);
         if (!storeId) return res.status(400).json({ message: 'Store context required' });
 
-        const productExists = await Product.findOne({ barcode, store: storeId });
-        if (productExists) {
-            return res.status(400).json({ message: 'Product with this barcode already exists in this store' });
+        // Only check for duplicate barcode if barcode is provided (not empty)
+        if (barcode && barcode.trim() !== '') {
+            const productExists = await Product.findOne({ barcode, store: storeId });
+            if (productExists) {
+                return res.status(400).json({ message: 'Product with this barcode already exists in this store' });
+            }
         }
 
         const product = new Product({
             name,
-            barcode,
+            barcode: barcode || '', // Ensure barcode is always a string
             costPrice: Number(costPrice),
             salePrice: Number(salePrice),
             discount: Number(discount) || 0,
@@ -75,19 +82,44 @@ const createProduct = async (req, res) => {
 
         const createdProduct = await product.save();
 
-        // If warehouse and stock are provided, create initial inventory entry
-        if (warehouseId && initialStock > 0) {
-            await Inventory.create({
-                product: createdProduct._id,
-                warehouse: warehouseId,
-                quantity: initialStock
-            });
+        // If stock is provided, create inventory entry
+        if (initialStock > 0) {
+            let targetWarehouse = warehouseId;
+            
+            // If no warehouse specified, use the first available warehouse
+            if (!targetWarehouse) {
+                console.log('No warehouse specified, searching for first warehouse...');
+                const firstWarehouse = await Warehouse.findOne({});
+                if (firstWarehouse) {
+                    targetWarehouse = firstWarehouse._id;
+                    console.log('Found warehouse:', firstWarehouse.name, firstWarehouse._id);
+                } else {
+                    console.log('WARNING: No warehouse found in database!');
+                }
+            }
+            
+            // Create inventory entry if we have a warehouse
+            if (targetWarehouse) {
+                console.log('Creating inventory - Product:', createdProduct._id, 'Warehouse:', targetWarehouse, 'Quantity:', initialStock);
+                await Inventory.create({
+                    product: createdProduct._id,
+                    warehouse: targetWarehouse,
+                    quantity: Number(initialStock)
+                });
+                console.log('Inventory created successfully!');
+                
+                // Sync product totalStock from inventories
+                await syncProductTotalStock(createdProduct._id);
+                console.log('Product totalStock synced!');
+            } else {
+                console.log('WARNING: No target warehouse, inventory NOT created!');
+            }
         }
 
         res.status(201).json(createdProduct);
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        console.error('Error creating product:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
     }
 };
 
@@ -102,7 +134,8 @@ const updateProduct = async (req, res) => {
 
         if (product) {
             // Check if barcode is being changed and if it conflicts in the SAME store
-            if (barcode && barcode !== product.barcode) {
+            // Only check if barcode is not empty
+            if (barcode && barcode.trim() !== '' && barcode !== product.barcode) {
                 const productExists = await Product.findOne({
                     barcode,
                     store: product.store,
@@ -114,7 +147,7 @@ const updateProduct = async (req, res) => {
             }
 
             product.name = name || product.name;
-            product.barcode = barcode || product.barcode;
+            product.barcode = barcode !== undefined ? barcode : product.barcode;
             product.costPrice = costPrice !== undefined ? Number(costPrice) : product.costPrice;
             product.salePrice = salePrice !== undefined ? Number(salePrice) : product.salePrice;
             product.discount = discount !== undefined ? Number(discount) : (product.discount || 0);
