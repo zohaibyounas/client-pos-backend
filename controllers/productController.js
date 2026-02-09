@@ -1,198 +1,225 @@
-const Product = require('../models/Product');
-const Inventory = require('../models/Inventory');
-const Warehouse = require('../models/Warehouse');
-const { syncProductTotalStock } = require('./inventoryController');
+const Product = require("../models/Product");
+const Inventory = require("../models/Inventory");
+const Warehouse = require("../models/Warehouse");
+const { syncProductTotalStock } = require("./inventoryController");
 
-// Helper to get active store
+// Helper: get active store
 const getActiveStore = (req) => {
-    return req.user.store || req.headers['x-store-id'];
+  return req.user?.store || req.headers["x-store-id"];
 };
 
-// @desc    Get all products
-// @route   GET /api/products
-// @access  Private
+// ===================== GET ALL PRODUCTS =====================
 const getProducts = async (req, res) => {
-    try {
-        const storeId = getActiveStore(req);
-        if (!storeId) return res.status(400).json({ message: 'Store context required' });
-
-        const { allStores } = req.query;
-        const query = allStores === 'true' ? {} : { store: storeId };
-
-        const products = await Product.find(query).populate('store', 'name');
-        res.json(products);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server error' });
+  try {
+    const storeId = getActiveStore(req);
+    if (!storeId) {
+      return res.status(400).json({ message: "Store context required" });
     }
+
+    const { allStores } = req.query;
+    const query = allStores === "true" ? {} : { store: storeId };
+
+    const products = await Product.find(query).populate("store", "name");
+    res.json(products);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
 };
 
-// @desc    Get product by ID
-// @route   GET /api/products/:id
-// @access  Private
+// ===================== GET PRODUCT BY ID =====================
 const getProductById = async (req, res) => {
-    try {
-        const product = await Product.findById(req.params.id);
-        if (product) {
-            res.json(product);
-        } else {
-            res.status(404).json({ message: 'Product not found' });
-        }
-    } catch (error) {
-        res.status(500).json({ message: 'Server error' });
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) {
+      return res.status(404).json({ message: "Product not found" });
     }
+    res.json(product);
+  } catch (error) {
+    res.status(500).json({ message: "Server error" });
+  }
 };
 
-// @desc    Create a product
-// @route   POST /api/products
-// @access  Private
+// ===================== CREATE PRODUCT =====================
 const createProduct = async (req, res) => {
-    const { name, barcode, costPrice, salePrice, discount, totalStock, stock, category, items, vendor, description, warehouseId } = req.body;
+  const {
+    name,
+    barcode,
+    costPrice,
+    salePrice,
+    discount,
+    totalStock,
+    stock,
+    category,
+    vendor,
+    description,
+    warehouseId,
+  } = req.body;
 
-    // Use totalStock (sent by frontend) or stock (alternate name)
-    const initialStock = Number(totalStock) || Number(stock) || 0;
-    console.log('=== Creating Product ===');
-    console.log('totalStock from request:', totalStock, 'stock from request:', stock, 'initialStock:', initialStock);
+  const initialStock = Number(totalStock) || Number(stock) || 0;
 
-    try {
-        const storeId = getActiveStore(req);
-        if (!storeId) return res.status(400).json({ message: 'Store context required' });
+  try {
+    const storeId = getActiveStore(req);
+    if (!storeId) {
+      return res.status(400).json({ message: "Store context required" });
+    }
 
-        // Only check for duplicate barcode if barcode is provided (not empty)
-        if (barcode && barcode.trim() !== '') {
-            const productExists = await Product.findOne({ barcode, store: storeId });
-            if (productExists) {
-                return res.status(400).json({ message: 'Product with this barcode already exists in this store' });
-            }
+    // Check duplicate barcode ONLY if barcode exists
+    if (barcode && barcode.trim() !== "") {
+      const exists = await Product.findOne({
+        barcode: barcode.trim(),
+        store: storeId,
+      });
+      if (exists) {
+        return res
+          .status(400)
+          .json({
+            message: "Product with this barcode already exists in this store",
+          });
+      }
+    }
+
+    // Build product object (IMPORTANT)
+    const productData = {
+      name,
+      costPrice: Number(costPrice),
+      salePrice: Number(salePrice),
+      discount: Number(discount) || 0,
+      totalStock: initialStock,
+      category,
+      vendor,
+      description,
+      store: storeId,
+      image: req.file ? `/uploads/${req.file.filename}` : undefined,
+    };
+
+    // ONLY add barcode if provided
+    if (barcode && barcode.trim() !== "") {
+      productData.barcode = barcode.trim();
+    }
+
+    const product = new Product(productData);
+    const createdProduct = await product.save();
+
+    // ===== INVENTORY =====
+    if (initialStock > 0) {
+      let targetWarehouse = warehouseId;
+
+      if (!targetWarehouse) {
+        const firstWarehouse = await Warehouse.findOne({});
+        if (firstWarehouse) {
+          targetWarehouse = firstWarehouse._id;
         }
+      }
 
-        const product = new Product({
-            name,
-            barcode: barcode || '', // Ensure barcode is always a string
-            costPrice: Number(costPrice),
-            salePrice: Number(salePrice),
-            discount: Number(discount) || 0,
-            totalStock: initialStock,
-            category,
-            vendor,
-            description,
-            image: req.file ? `/uploads/${req.file.filename}` : undefined,
-            store: storeId
+      if (targetWarehouse) {
+        await Inventory.create({
+          product: createdProduct._id,
+          warehouse: targetWarehouse,
+          quantity: initialStock,
         });
 
-        const createdProduct = await product.save();
-
-        // If stock is provided, create inventory entry
-        if (initialStock > 0) {
-            let targetWarehouse = warehouseId;
-            
-            // If no warehouse specified, use the first available warehouse
-            if (!targetWarehouse) {
-                console.log('No warehouse specified, searching for first warehouse...');
-                const firstWarehouse = await Warehouse.findOne({});
-                if (firstWarehouse) {
-                    targetWarehouse = firstWarehouse._id;
-                    console.log('Found warehouse:', firstWarehouse.name, firstWarehouse._id);
-                } else {
-                    console.log('WARNING: No warehouse found in database!');
-                }
-            }
-            
-            // Create inventory entry if we have a warehouse
-            if (targetWarehouse) {
-                console.log('Creating inventory - Product:', createdProduct._id, 'Warehouse:', targetWarehouse, 'Quantity:', initialStock);
-                await Inventory.create({
-                    product: createdProduct._id,
-                    warehouse: targetWarehouse,
-                    quantity: Number(initialStock)
-                });
-                console.log('Inventory created successfully!');
-                
-                // Sync product totalStock from inventories
-                await syncProductTotalStock(createdProduct._id);
-                console.log('Product totalStock synced!');
-            } else {
-                console.log('WARNING: No target warehouse, inventory NOT created!');
-            }
-        }
-
-        res.status(201).json(createdProduct);
-    } catch (error) {
-        console.error('Error creating product:', error);
-        res.status(500).json({ message: 'Server error', error: error.message });
+        await syncProductTotalStock(createdProduct._id);
+      }
     }
+
+    res.status(201).json(createdProduct);
+  } catch (error) {
+    console.error("Error creating product:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
 };
 
-// @desc    Update a product
-// @route   PUT /api/products/:id
-// @access  Private
+// ===================== UPDATE PRODUCT =====================
 const updateProduct = async (req, res) => {
-    const { name, barcode, costPrice, salePrice, discount, totalStock, category, vendor, description } = req.body;
+  const {
+    name,
+    barcode,
+    costPrice,
+    salePrice,
+    discount,
+    totalStock,
+    category,
+    vendor,
+    description,
+  } = req.body;
 
-    try {
-        const product = await Product.findById(req.params.id);
-
-        if (product) {
-            // Check if barcode is being changed and if it conflicts in the SAME store
-            // Only check if barcode is not empty
-            if (barcode && barcode.trim() !== '' && barcode !== product.barcode) {
-                const productExists = await Product.findOne({
-                    barcode,
-                    store: product.store,
-                    _id: { $ne: product._id }
-                });
-                if (productExists) {
-                    return res.status(400).json({ message: 'Barcode already in use' });
-                }
-            }
-
-            product.name = name || product.name;
-            product.barcode = barcode !== undefined ? barcode : product.barcode;
-            product.costPrice = costPrice !== undefined ? Number(costPrice) : product.costPrice;
-            product.salePrice = salePrice !== undefined ? Number(salePrice) : product.salePrice;
-            product.discount = discount !== undefined ? Number(discount) : (product.discount || 0);
-            product.totalStock = totalStock !== undefined ? Number(totalStock) : product.totalStock;
-            product.category = category || product.category;
-            product.vendor = vendor || product.vendor;
-            product.description = description || product.description;
-
-            if (req.file) {
-                product.image = `/uploads/${req.file.filename}`;
-            }
-
-            const updatedProduct = await product.save();
-            res.json(updatedProduct);
-        } else {
-            res.status(404).json({ message: 'Product not found' });
-        }
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server error' });
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) {
+      return res.status(404).json({ message: "Product not found" });
     }
+
+    // Check barcode conflict ONLY if changed and exists
+    if (
+      barcode &&
+      barcode.trim() !== "" &&
+      barcode.trim() !== product.barcode
+    ) {
+      const exists = await Product.findOne({
+        barcode: barcode.trim(),
+        store: product.store,
+        _id: { $ne: product._id },
+      });
+
+      if (exists) {
+        return res.status(400).json({ message: "Barcode already in use" });
+      }
+    }
+
+    product.name = name ?? product.name;
+    product.costPrice =
+      costPrice !== undefined ? Number(costPrice) : product.costPrice;
+    product.salePrice =
+      salePrice !== undefined ? Number(salePrice) : product.salePrice;
+    product.discount =
+      discount !== undefined ? Number(discount) : product.discount;
+    product.totalStock =
+      totalStock !== undefined ? Number(totalStock) : product.totalStock;
+    product.category = category ?? product.category;
+    product.vendor = vendor ?? product.vendor;
+    product.description = description ?? product.description;
+
+    // Barcode handling (IMPORTANT)
+    if (barcode !== undefined) {
+      if (barcode.trim() === "") {
+        product.barcode = undefined; // REMOVE field
+      } else {
+        product.barcode = barcode.trim();
+      }
+    }
+
+    if (req.file) {
+      product.image = `/uploads/${req.file.filename}`;
+    }
+
+    const updatedProduct = await product.save();
+    res.json(updatedProduct);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server error" });
+  }
 };
 
-// @desc    Delete a product
-// @route   DELETE /api/products/:id
-// @access  Private
+// ===================== DELETE PRODUCT =====================
 const deleteProduct = async (req, res) => {
-    try {
-        const product = await Product.findById(req.params.id);
-
-        if (product) {
-            await product.deleteOne();
-            res.json({ message: 'Product removed' });
-        } else {
-            res.status(404).json({ message: 'Product not found' });
-        }
-    } catch (error) {
-        res.status(500).json({ message: 'Server error' });
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) {
+      return res.status(404).json({ message: "Product not found" });
     }
+
+    await product.deleteOne();
+    res.json({ message: "Product removed" });
+  } catch (error) {
+    res.status(500).json({ message: "Server error" });
+  }
 };
 
 module.exports = {
-    getProducts,
-    getProductById,
-    createProduct,
-    updateProduct,
-    deleteProduct
+  getProducts,
+  getProductById,
+  createProduct,
+  updateProduct,
+  deleteProduct,
 };
