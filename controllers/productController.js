@@ -85,7 +85,7 @@ const createProduct = async (req, res) => {
       costPrice: Number(costPrice),
       salePrice: Number(salePrice),
       discount: Number(discount) || 0,
-      totalStock: initialStock,
+      totalStock: initialStock, // Save the stock value
       category,
       vendor,
       description,
@@ -102,25 +102,19 @@ const createProduct = async (req, res) => {
     const createdProduct = await product.save();
 
     // ===== INVENTORY =====
-    if (initialStock > 0) {
-      let targetWarehouse = warehouseId;
-
-      if (!targetWarehouse) {
-        const firstWarehouse = await Warehouse.findOne({});
-        if (firstWarehouse) {
-          targetWarehouse = firstWarehouse._id;
-        }
-      }
-
-      if (targetWarehouse) {
-        await Inventory.create({
-          product: createdProduct._id,
-          warehouse: targetWarehouse,
-          quantity: initialStock,
-        });
-
-        await syncProductTotalStock(createdProduct._id);
-      }
+    // ONLY create inventory if both stock AND warehouse are provided
+    if (initialStock > 0 && warehouseId) {
+      console.log('Creating inventory - Product:', createdProduct._id, 'Warehouse:', warehouseId, 'Stock:', initialStock);
+      await Inventory.create({
+        product: createdProduct._id,
+        warehouse: warehouseId,
+        quantity: Number(initialStock),
+      });
+      console.log('Inventory created successfully!');
+      
+      await syncProductTotalStock(createdProduct._id);
+    } else if (initialStock > 0 && !warehouseId) {
+      console.log('Stock provided but no warehouse - inventory NOT created');
     }
 
     res.status(201).json(createdProduct);

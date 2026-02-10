@@ -23,7 +23,7 @@ const productSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-// Compound index to ensure unique barcode PER STORE (sparse to allow null barcodes)
-productSchema.index({ barcode: 1, store: 1 }, { unique: true, sparse: true });
+// No automatic index on barcode - we handle uniqueness in controller
+// This allows unlimited products without barcodes
 
 module.exports = mongoose.model("Product", productSchema);

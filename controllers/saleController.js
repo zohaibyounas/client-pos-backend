@@ -93,50 +93,47 @@ const createSale = async (req, res) => {
             // Update Stock
             for (const item of enrichedItems) {
                 console.log('\n=== Processing sale for product:', item.product, 'Quantity:', item.quantity, '===');
-                // Find warehouse(s) that have this product in inventory
-                    // Try to find a warehouse with available stock first (prefer warehouse with most stock)
-                    let inventory = await Inventory.findOne({
-                        product: item.product,
-                        quantity: { $gt: 0 }
-                    }).populate('warehouse').sort({ quantity: -1 });
-                    console.log('Found inventory with stock > 0:', inventory ? `Yes (Qty: ${inventory.quantity})` : 'No');
-
-                    // If no warehouse has stock, find any warehouse that has this product
-                    if (!inventory) {
-                        console.log('No inventory with stock, searching for any inventory...');
-                        inventory = await Inventory.findOne({
-                            product: item.product
-                        }).populate('warehouse');
-                        console.log('Found any inventory:', inventory ? `Yes (Qty: ${inventory.quantity})` : 'No');
-                    }
-
-                    // If still no inventory found, find the first warehouse (for new products)
-                    if (!inventory) {
-                        console.log('No inventory found at all! Creating negative inventory...');
-                        const warehouse = await Warehouse.findOne({});
-                        if (warehouse) {
-                            // Create inventory entry with negative balance
-                            console.log('Creating negative inventory in warehouse:', warehouse._id, 'Qty:', -Number(item.quantity));
-                            await Inventory.create({
-                                product: item.product,
-                                warehouse: warehouse._id,
-                                quantity: -Number(item.quantity)
-                            });
-                            productWarehouseMap[item.product.toString()] = warehouse._id.toString();
-                        } else {
-                            console.log('ERROR: No warehouse found in database!');
-                        }
-                    } else {
-                        // Update inventory quantity - ensure Number conversion
-                        console.log('Updating inventory - Before:', inventory.quantity, 'After:', Number(inventory.quantity) - Number(item.quantity));
-                        inventory.quantity = Number(inventory.quantity) - Number(item.quantity);
-                        await inventory.save();
-                        console.log('Inventory updated successfully!');
-                        productWarehouseMap[item.product.toString()] = inventory.warehouse._id.toString();
-                    }
                 
-                // Sync product totalStock from all warehouse inventories
-                await syncProductTotalStock(item.product);
+                // Update product totalStock directly (always works)
+                const product = await Product.findById(item.product);
+                if (product) {
+                    product.totalStock = Number(product.totalStock) - Number(item.quantity);
+                    await product.save();
+                    console.log('Product totalStock updated:', product.totalStock);
+                }
+                
+                // Try to find warehouse inventory
+                let inventory = await Inventory.findOne({
+                    product: item.product,
+                    quantity: { $gt: 0 }
+                }).populate('warehouse').sort({ quantity: -1 });
+                
+                console.log('Found inventory with stock > 0:', inventory ? `Yes (Qty: ${inventory.quantity})` : 'No');
+
+                // If no inventory with stock, find any inventory
+                if (!inventory) {
+                    console.log('No inventory with stock, searching for any inventory...');
+                    inventory = await Inventory.findOne({
+                        product: item.product
+                    }).populate('warehouse');
+                    console.log('Found any inventory:', inventory ? `Yes (Qty: ${inventory.quantity})` : 'No');
+                }
+
+                // Update inventory if found, otherwise skip (product sold from general stock)
+                if (inventory) {
+                    console.log('Updating inventory - Before:', inventory.quantity, 'After:', Number(inventory.quantity) - Number(item.quantity));
+                    inventory.quantity = Number(inventory.quantity) - Number(item.quantity);
+                    await inventory.save();
+                    console.log('Inventory updated successfully!');
+                    productWarehouseMap[item.product.toString()] = inventory.warehouse._id.toString();
+                } else {
+                    console.log('No inventory found - product sold from general stock (no warehouse tracking)');
+                    // Try to get first warehouse for receipt printing
+                    const firstWarehouse = await Warehouse.findOne({});
+                    if (firstWarehouse) {
+                        productWarehouseMap[item.product.toString()] = firstWarehouse._id.toString();
+                    }
+                }
             }
 
             // Update Customer Balance if linked
