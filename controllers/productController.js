@@ -11,12 +11,15 @@ const getActiveStore = (req) => {
 // ===================== GET ALL PRODUCTS =====================
 const getProducts = async (req, res) => {
   try {
-    const storeId = getActiveStore(req);
-    if (!storeId) {
+    const { allStores, storeId: queryStoreId } = req.query;
+    
+    // Use query param storeId if provided, otherwise use active store
+    const storeId = queryStoreId || getActiveStore(req);
+    
+    if (!storeId && allStores !== "true") {
       return res.status(400).json({ message: "Store context required" });
     }
 
-    const { allStores } = req.query;
     const query = allStores === "true" ? {} : { store: storeId };
 
     const products = await Product.find(query).populate("store", "name");
